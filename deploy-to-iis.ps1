@@ -1,8 +1,8 @@
 # Parameters - adjust these as needed
-$siteName = "SampleApp"
-$appPoolName = "SampleAppPool"
-$physicalPath = "C:\inetpub\wwwroot\SampleApp"
-$port = 8080
+$siteName = "Sample.NET-2"
+$appPoolName = "SampleNETPool"
+$physicalPath = "C:\inetpub\wwwroot\Sample.NET-2"
+$port = 9090
 $publishFolder = ".\publish"
 $logsPath = "$physicalPath\logs"
 $aspNetCoreModuleInstalled = $false
@@ -16,8 +16,27 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 # Import the WebAdministration module
 Import-Module WebAdministration
 
-# Check if ASP.NET Core Module is installed
-$aspNetCoreModuleInstalled = (Get-WindowsOptionalFeature -Online -FeatureName IIS-ASPNET45).State -eq "Enabled"
+# Check if ASP.NET Core Module is installed - more accurate method
+$aspNetCoreModuleInstalled = $false
+try {
+    # Check if module exists in IIS modules list
+    $modules = & C:\Windows\System32\inetsrv\appcmd.exe list modules | Select-String -Pattern "AspNetCoreModuleV2"
+    if ($modules) {
+        $aspNetCoreModuleInstalled = $true
+        Write-Host "ASP.NET Core Module V2 is installed." -ForegroundColor Green
+    } else {
+        # Secondary check - look for the DLL directly
+        $aspNetCoreDll = Get-ChildItem -Path "C:\Windows\System32\inetsrv" -Filter "aspnetcorev2*.dll" -ErrorAction SilentlyContinue
+        if ($aspNetCoreDll) {
+            $aspNetCoreModuleInstalled = $true
+            Write-Host "ASP.NET Core Module V2 DLL found in system directory." -ForegroundColor Green
+        }
+    }
+} catch {
+    # If any errors in checks, we'll fall back to asking the user
+    Write-Host "Could not verify ASP.NET Core Module installation: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 if (-not $aspNetCoreModuleInstalled) {
     Write-Warning "ASP.NET Core Module V2 might not be installed. Please ensure you have the .NET Core Hosting Bundle installed."
     Write-Warning "You can download it from: https://dotnet.microsoft.com/download/dotnet/thank-you/runtime-aspnetcore-latest-windows-hosting-bundle-installer"
@@ -29,8 +48,25 @@ if (-not $aspNetCoreModuleInstalled) {
 }
 
 # Publish the application (if not already done)
-Write-Host "Publishing application..."
-dotnet publish --configuration Release --output $publishFolder
+Write-Host "Publishing application Sample.NET..."
+# Check if we need to rename the project file
+$projectFile = Get-ChildItem -Path . -Filter "*.csproj" | Select-Object -First 1
+if ($projectFile.Name -ne "Sample.NET.csproj") {
+    Write-Host "Found project file: $($projectFile.Name). Renaming to Sample.NET.csproj for build..." -ForegroundColor Yellow
+    # Create a temporary copy with the correct name
+    Copy-Item -Path $projectFile.FullName -Destination "Sample.NET.csproj" -Force
+    $usingTempFile = $true
+} else {
+    $usingTempFile = $false
+}
+
+# Build with the correctly named project file
+dotnet publish "Sample.NET2.csproj" --configuration Release --output $publishFolder
+
+# Clean up temporary file if we created one
+if ($usingTempFile) {
+    Remove-Item -Path "Sample.NET.csproj" -Force
+}
 
 # Stop the site if it exists
 if (Test-Path "IIS:\Sites\$siteName") {
@@ -112,6 +148,35 @@ Start-Website -Name $siteName
 Write-Host "Deployment complete! Your site should be available at http://localhost:$port"
 Write-Host "You can also access the Swagger UI at http://localhost:$port/swagger"
 Write-Host "To verify the API is working, try: http://localhost:$port/ping"
+
+# Create or update web.config
+Write-Host "Creating/updating web.config file..."
+$dllName = (Get-ChildItem -Path $publishFolder -Filter "*.dll" | Where-Object { $_.Name -match "\.dll$" } | Select-Object -First 1).Name
+if ($dllName) {
+    Write-Host "Found DLL: $dllName" -ForegroundColor Green
+    $webConfigContent = @"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <location path="." inheritInChildApplications="false">
+    <system.webServer>
+      <handlers>
+        <add name="aspNetCore" path="*" verb="*" modules="AspNetCoreModuleV2" resourceType="Unspecified" />
+      </handlers>
+      <aspNetCore processPath="dotnet" arguments=".\$dllName" stdoutLogEnabled="true" stdoutLogFile=".\logs\stdout" hostingModel="inprocess" />
+      <security>
+        <requestFiltering>
+          <!-- Increase max allowed content length to 50MB (specified in bytes) -->
+          <requestLimits maxAllowedContentLength="52428800" />
+        </requestFiltering>
+      </security>
+    </system.webServer>
+  </location>
+</configuration>
+"@
+    Set-Content -Path "$physicalPath\web.config" -Value $webConfigContent -Force
+} else {
+    Write-Warning "Could not find any DLL in the publish folder. Web.config might not be correctly configured."
+}
 
 # Final checks
 Write-Host "`nVerifying ASP.NET Core Module status:"
