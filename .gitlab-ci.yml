@@ -1,0 +1,25 @@
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  # Adjust these variables for your environment, they can be defined either here or in gitlab server
+  # SSH_PRIVATE_KEY: Needs to be defined in the gitlab server
+  # SSH_KNOWN_HOSTS: Needs to be defined in the gitlab server
+  DEPLOY_SERVER: "your-iis-server.example.com"
+  DEPLOY_USER: "deploy-user"
+  DEPLOY_PATH: "C:/inetpub/wwwroot/your-app-folder"
+  APP_NAME: "YourNetApp"
+
+build:
+  stage: build
+  image: mcr.microsoft.com/dotnet/sdk:9.0
+  script:
+    - dotnet restore
+    - dotnet build --configuration Release
+    - dotnet publish --configuration Release --output ./publish
+  artifacts:
+    paths:
+      - ./publish/
+    expire_in: 1 hour
