@@ -4,6 +4,8 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Sample.NET-3</AssemblyName>
+    <RootNamespace>Sample.NET_3</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

@@ -2,32 +2,19 @@
 # Check if ASP.NET Core Module is installed
 # Create or update web.config
 
-
 # Parameters - adjust these as needed
-$siteName = "Sample.NET-2"
-$appPoolName = "SampleNETPool"
-$physicalPath = "C:\inetpub\wwwroot\Sample.NET-2"
+$siteName = "Sample.NET-3"
+$appPoolName = "SampleNET3Pool"
+$physicalPath = "C:\inetpub\wwwroot\Sample.NET-3"
 $port = 9090
 $publishFolder = ".\publish"
 $logsPath = "$physicalPath\logs"
-$aspNetCoreModuleInstalled = $false
 
 # Import the WebAdministration module
 Import-Module WebAdministration
 
 # Publish the application (if not already done)
-dotnet publish "Sample.NET2.csproj" --configuration Release --output $publishFolder
-
-# Clean up temporary file if we created one
-if ($usingTempFile) {
-    Remove-Item -Path "Sample.NET2.csproj" -Force
-}
-
-# Stop the site if it exists
-if (Test-Path "IIS:\Sites\$siteName") {
-    Write-Host "Stopping existing site..."
-    Stop-Website -Name $siteName
-}
+dotnet publish "Sample.NET-3.csproj" --configuration Release --output $publishFolder
 
 # Create the directory if it doesn't exist
 if (-not (Test-Path $physicalPath)) {
@@ -41,6 +28,12 @@ if (-not (Test-Path $logsPath)) {
     New-Item -ItemType Directory -Path $logsPath -Force
 }
 
+# Stop the site if it exists
+if (Test-Path "IIS:\Sites\$siteName") {
+    Write-Host "Stopping existing site..."
+    Stop-Website -Name $siteName
+}
+
 # Delete existing content in the physical path
 Write-Host "Clearing destination directory..."
 Get-ChildItem -Path $physicalPath -Recurse -Exclude "logs" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
@@ -48,6 +41,15 @@ Get-ChildItem -Path $physicalPath -Recurse -Exclude "logs" | Remove-Item -Recurs
 # Copy published files to the physical path
 Write-Host "Copying files to $physicalPath..."
 Copy-Item -Path "$publishFolder\*" -Destination $physicalPath -Recurse -Force
+
+# Update web.config with correct DLL name
+$webConfigPath = "$physicalPath\web.config"
+if (Test-Path $webConfigPath) {
+    Write-Host "Updating web.config..."
+    $webConfig = Get-Content $webConfigPath -Raw
+    $webConfig = $webConfig -replace '\\.\[ACTUAL-DLL-NAME\].dll', '\Sample.NET-3.dll'
+    Set-Content $webConfigPath $webConfig
+}
 
 # Set appropriate permissions
 Write-Host "Setting permissions..."
