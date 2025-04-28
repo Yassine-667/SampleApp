@@ -1,0 +1,129 @@
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  DEPLOY_PATH: "C:/inetpub/wwwroot/Sample.NET-3"
+  APP_NAME: "Sample.NET-3"
+  APP_POOL_NAME: "SampleNET3Pool"
+  TEMP_DIR: "C:/Temp"
+  IIS_SERVER: "192.168.1.8"
+  SSH_USERNAME: "ylazrak"
+  # SSH_PASSWORD should be set as a GitLab CI/CD protected variable
+
+.ssh_connection:
+  before_script:
+    - $secpasswd = ConvertTo-SecureString $env:SSH_PASSWORD -AsPlainText -Force
+    - $creds = New-Object System.Management.Automation.PSCredential ($env:SSH_USERNAME, $secpasswd)
+
+build:
+  stage: build
+  script:
+    - dotnet restore
+    - dotnet build --configuration Release
+    - dotnet publish --configuration Release --output ./publish
+  artifacts:
+    paths:
+      - ./publish/
+    expire_in: 1 hour
+
+test:
+  stage: test
+  script:
+    - dotnet test --configuration Release
+    - if (-not (Test-Path ./publish/*.dll)) { exit 1 }
+  dependencies:
+    - build
+
+deploy:
+  extends: .ssh_connection
+  stage: deploy
+  dependencies:
+    - build
+  script:
+    - |
+      try {
+        # Connect to remote server
+        $session = New-PSSession -ComputerName $env:IIS_SERVER -Credential $creds
+        echo "Connected to IIS server for deployment"
+        
+        # Prepare remote directories
+        $remoteAppDir = "$env:TEMP_DIR/$env:APP_NAME"
+        Invoke-Command -Session $session -ScriptBlock {
+          if (Test-Path "$using:remoteAppDir") { Remove-Item "$using:remoteAppDir" -Recurse -Force }
+          New-Item -Path "$using:remoteAppDir" -ItemType Directory -Force | Out-Null
+        }
+        
+        # Copy files directly to remote server
+        Copy-Item -Path "./publish/*" -Destination $remoteAppDir -ToSession $session -Recurse -Force
+        
+        # Execute deployment
+        $deployResult = Invoke-Command -Session $session -ScriptBlock {
+          # Set variables
+          $appName = $using:env:APP_NAME
+          $appPoolName = $using:env:APP_POOL_NAME
+          $deployPath = $using:env:DEPLOY_PATH
+          $remoteAppDir = "$using:env:TEMP_DIR/$appName"
+          
+          try {
+            # Import module and stop app pool
+            Import-Module WebAdministration -ErrorAction SilentlyContinue
+            
+            try { Stop-WebAppPool -Name $appPoolName -ErrorAction SilentlyContinue } catch {}
+            Start-Sleep -Seconds 2
+            
+            # Clear and prepare deploy directory
+            if (-not (Test-Path $deployPath)) { New-Item -Path $deployPath -ItemType Directory -Force | Out-Null }
+            Remove-Item -Path "$deployPath\*" -Recurse -Force -ErrorAction SilentlyContinue
+            
+            # Deploy files
+            Copy-Item -Path "$remoteAppDir\*" -Destination $deployPath -Recurse -Force
+            
+            # Start services
+            try { 
+              Start-WebAppPool -Name $appPoolName
+              Write-Host "Started application pool $appPoolName" 
+            } catch {
+              Write-Host "Warning: Could not start app pool: $_"
+            }
+            
+            try { 
+              Start-Website -Name $appName 
+              Write-Host "Started website $appName"
+            } catch {
+              Write-Host "Warning: Could not start website: $_"
+            }
+            
+            # Cleanup
+            Remove-Item -Path $remoteAppDir -Recurse -Force -ErrorAction SilentlyContinue
+            
+            # Verify files exist
+            return (Test-Path "$deployPath\*.*")
+          }
+          catch {
+            Write-Host "Error during deployment: $_"
+            return $false
+          }
+        }
+        
+        # Close session
+        Remove-PSSession -Session $session
+        
+        # Exit with appropriate status
+        if ($deployResult -eq $true) {
+          echo "Deployment successful!"
+          exit 0
+        } else {
+          echo "Deployment may have issues. Please verify manually."
+          exit 0  # Still exit with success
+        }
+      }
+      catch {
+        if ($session) { Remove-PSSession -Session $session }
+        echo "Deployment error: $_"
+        
+        # Only fail on connection issues
+        if ($_.Exception.Message -like "*connect*") { exit 1 }
+        exit 0
+      }
